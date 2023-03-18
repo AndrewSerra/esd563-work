@@ -113,14 +113,6 @@ class BallPositionFormApp(QWidget):
         if d <= 0:
             self.outputText.setText = "Invalid depth value: %d" % d
             return
-
-        if self.ballCentroidYLeft < cy:
-            self.outputText.setText = "Invalid negative value calculating Y"
-            return
-
-        if self.ballCentroidXLeft < cx:
-            self.outputText.setText = "Invalid negative value calculating X"
-            return
             
         self.z = (b*f) / d
         self.x = self.z * (self.ballCentroidXLeft - cx) * ps / f
