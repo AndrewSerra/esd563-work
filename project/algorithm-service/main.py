@@ -13,7 +13,7 @@ def create_producer(servers) -> KafkaProducer:
     try:
         return KafkaProducer(bootstrap_servers=servers)
     except Exception as e:
-        logger.info("Fail state in create_producer")
+        logger.warning("Fail state in create_producer")
         logger.error(e)
         return None
 
@@ -34,17 +34,23 @@ if __name__ == "__main__":
     FORMAT = '%(asctime)s %(message)s'
     logging.basicConfig(format=FORMAT, level=logging.DEBUG)
     producer = None
+    err_count = 0
 
     while producer is None:
         producer = create_producer([
             "kafka:29092",
         ])
-        # sleep(1)
 
         if producer is None:
-            logger.error("Kafka producer cannot be created.")
+            logger.error(f"Kafka producer cannot be created. Error count at {err_count+1}")
             sleep(1)
-            # sys.exit(1)
+            err_count += 1
+        else:
+            err_count = 0
+
+        if err_count == 5:
+            logger.info(f"Error count reached maximum ({err_count}) exiting program.")
+            sys.exit(1)
 
     count = 0
     max_val = 360
