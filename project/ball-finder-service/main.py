@@ -1,6 +1,7 @@
 import cv2
 import threading
 import time
+import numpy as np
 from frameGrabber import ImageProcessing
 from enum import Enum
 
@@ -15,17 +16,15 @@ class CameraConstants(Enum):
 
 class ProcessingParameters(Enum):
     dp             = 1
-    min_dist       = 200
-    param_1        = 30
-    param_2        = 10
-    min_radius     = 1
-    max_radius     = 400
+    min_dist       = 50
+    param_1        = 200
+    param_2        = 30
+    min_radius     = 5
+    max_radius     = 40
 
-def get_circles(image, camera_side = None, results = None):
+results = dict()
 
-    if image is None:
-        return
-
+def get_circles_right(image):
     circles = cv2.HoughCircles(
         image, 
         cv2.HOUGH_GRADIENT, 
@@ -37,9 +36,38 @@ def get_circles(image, camera_side = None, results = None):
         maxRadius=ProcessingParameters.max_radius.value)
 
     if circles is not None:
-        if results is not None and camera_side is not None:
-            results[camera_side] = circles
+        circles_int = np.round(circles[0, :]).astype("int")
+        center_x = np.mean(circles_int[:, 0])
+        center_y = np.mean(circles_int[:, 1])
+        if len(circles_int) != 1:
+            print("Too many damn circles: " + len(circles_int))
+            return
 
+        global results
+        results["right"] = dict({"x": center_x, "y": center_y})
+        print(results)
+    return
+
+def get_circles_left(image):
+    circles = cv2.HoughCircles(
+        image, 
+        cv2.HOUGH_GRADIENT, 
+        ProcessingParameters.dp.value,
+        ProcessingParameters.min_dist.value,
+        param1=ProcessingParameters.param_1.value,
+        param2=ProcessingParameters.param_2.value,
+        minRadius=ProcessingParameters.min_radius.value,
+        maxRadius=ProcessingParameters.max_radius.value)
+
+    if circles is not None:
+        circles_int = np.round(circles[0, :]).astype("int")
+        if len(circles_int) != 1:
+            print("Too many damn circles: " + len(circles_int))
+            return
+
+        global results
+        results["left"] = dict({"x": circles_int[0], "y": circles_int[1]})
+        print(results)
     return
 
 if __name__ == "__main__":
@@ -50,26 +78,25 @@ if __name__ == "__main__":
 
         img_cam_left, img_cam_right = camera_processor.getStereoGray()
 
-        left_processing = threading.Thread(target=get_circles, args=(img_cam_left, "left", results,))
-        right_processing = threading.Thread(target=get_circles, args=(img_cam_right, "right", results,))
-        
-        threads = [left_processing, right_processing]
+        get_circles_left(img_cam_left)
+        get_circles_right(img_cam_right)
 
-        start_t = time.time()
-
-        for thread in threads:
-            thread.start()
-
-        for thread in threads:
-            thread.join()
-
-        elapsed_t = time.time() - start_t
-
-        if ("left" in results) and ("right" in results):
+        if ("left" not in results) or ("right" not in results):
             continue
 
-        print(f"Successfully completed in {elapsed_t}s")
+        left_circle = results.get("left")
+        right_circle = results.get("right")
+
+        if left_circle and right_circle:
+            Z = (CameraConstants.b.value * CameraConstants.f.value) / \
+                        (abs((left_circle.get("x") - CameraConstants.center_x_left.value) - ( right_circle.get("x") - CameraConstants.center_x_right.value)) * CameraConstants.ps.value)
+                    
+            X = (Z * (left_circle.get("x") - CameraConstants.center_x_left.value) * CameraConstants.ps.value) / CameraConstants.f.value
+                
+            Y = (Z * (left_circle.get("y") - CameraConstants.center_y_left.value) * CameraConstants.ps.value) / CameraConstants.f.value
+
         print(f"Results {results}")
-        time.sleep(2)
+        
+        time.sleep(0.5)
 
 
