@@ -1,0 +1,13 @@
+[Unit]
+Description=Message Delivery Service
+After=multi-user.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/python3 /usr/esd-bounce/message_print.py
+ExecReload=/usr/bin/python3 /usr/esd-bounce/message_print.py
+Restart=always
+
+
+[Install]
+WantedBy=multi-user.target
