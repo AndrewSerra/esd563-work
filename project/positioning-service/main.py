@@ -1,3 +1,6 @@
+#!/usr/bin/python3
+import os
+import subprocess
 import time
 import json
 import numpy as np
@@ -9,11 +12,14 @@ from frameGrabber import ImageFeedthrough
 
 ADDRESS     = 0x19
 TAG_SIZE    = 0.1
-OUTPUT_FILE = "./april_tag.json"
+OUTPUT_FILE = "/etc/esd-bounce/april_tag.json"
+
+FIELD_HEIGHT  = 0.1 # 0.42
+FIELD_WIDTH   = 0.1 # 0.67
 
 class AccelThresholds(Enum):
-    X = 5.0
-    Y = 5.0
+    X = 1.0
+    Y = 1.0
     Z = 10.0
 
 class CameraConstants(Enum):
@@ -54,7 +60,7 @@ def get_accel(bus, reg):
     print(f"x: {x} y: {y} z: {z}")
     return (x, y, z)
 
-def get_pos_obj(x, y, z):
+def get_accel_obj(x, y, z):
     return dict({
         "x": x,
         "y": y,
@@ -65,7 +71,7 @@ def get_pos_obj(x, y, z):
 def run_pos_update():
     feed_processing = ImageFeedthrough()
     detector = apriltag.Detector()
-
+    time.sleep(1.5)
     left_gray_img, right_gray_img = feed_processing.getStereoGray()
 
     # Left camera matrix
@@ -112,55 +118,70 @@ def run_pos_update():
         Z = Z / 1000.0
 
         camera_position = np.array([X, Y, Z, 1]).T
-        position = np.dot(np.linalg.inv(pose[0]), camera_position)
+
+        # 0.446500427184 0.172319981394 0.127633107641
+        # -0.10172087 -0.07146178 -0.01745615
+
+        # 0.548221297184, 0.243781761394
+        # [ x y z idk ]
+        w_position = np.dot(np.linalg.inv(pose[0]), camera_position) + np.asarray([ (TAG_SIZE / 2), (TAG_SIZE / 2), 0, 0]) # world
+
+        OFFSET_HEIGHT = (FIELD_HEIGHT / 2)
+        OFFSET_WIDTH = (FIELD_WIDTH / 2)
+
+        bounding_box = {
+            # Upper rectangle
+            "top_top_left": (w_position[0] - OFFSET_WIDTH, w_position[1] - OFFSET_HEIGHT, 1),
+            "top_top_right": (w_position[0] + OFFSET_WIDTH, w_position[1] - OFFSET_HEIGHT, 1),
+            "top_bottom_left": (w_position[0] - OFFSET_WIDTH, w_position[1] + OFFSET_HEIGHT, 1),
+            "top_bottom_right": (w_position[0] + OFFSET_WIDTH, w_position[1] + OFFSET_HEIGHT, 1),
+            # Lower rectangle
+            "bottom_top_left": (w_position[0] - OFFSET_WIDTH, w_position[1] - OFFSET_HEIGHT, 0),
+            "bottom_top_right": (w_position[0] + OFFSET_WIDTH, w_position[1] - OFFSET_HEIGHT, 0),
+            "bottom_bottom_left": (w_position[0] - OFFSET_WIDTH, w_position[1] + OFFSET_HEIGHT, 0),
+            "bottom_bottom_right": (w_position[0] + OFFSET_WIDTH , w_position[1] + OFFSET_HEIGHT, 0),
+        }
     
-        # convert to centimeters
-        position_cm = position[0:3] * 100
+        with open(OUTPUT_FILE, "w") as f:
+            json.dump(dict({"world_pos": bounding_box}), f)
 
-        rotation_mat = pose[0][0:3,0:3]                # slice out the 3x3 rotation matrix from the 4x4 matrix
-        rotation_vec, _ = cv2.Rodrigues(rotation_mat)  # convert 3x3 rotation matrix to rotation vector
-        translation_vec = pose[0][0:3,3]               # slice out the 3x1 translation vector
-
-        bottom_tag_points =  np.array([[-.29 , -.39,  0],  #closet to you bottom left, left side width
-                                       [ .15 , -.389, 0],  # back left(up or down), back left (r to l)
-                                       [ .13 ,  .27,  0],  #back right(up or down), back right(r to l)
-                                       [-.29,   .29,  0]]) #closet to you bottom right, right side width
-
-        cam_px_pts_bottom = cv2.projectPoints(bottom_tag_points, rotation_vec, translation_vec, mtx_left, None)
-
-        top_tag_points = np.array([[-.29 , -.39 , -.1],
-                                   [ .15 , -.389 , -.1],
-                                   [ .13,   .27 ,  -.1],
-                                   [-.29,   .29,   -.1]])
-        
-        cam_px_pts_top = cv2.projectPoints(top_tag_points, rotation_vec, translation_vec, mtx_left, None)
-
-        with open(OUTPUT_FILE, "+a") as f:
-            json.dump(dict(), f)
+        time.sleep(0.5)
+        subprocess.check_call(["systemctl", "restart", "ball_find.esd2.service"])
     else:
        print("No detection.")
 
 if __name__ == "__main__":
+    print("Starting Ball Finder Service...")
+    os.makedirs("/etc/esd-bounce", exist_ok=True)
+    bus = SMBus(1)
 
-    run_pos_update()
-    # bus = SMBus(1)
+    prev_state = None
 
-    # prev_state = None
+    # Setup i2c settings
+    write(bus, 0x7c, 0) # Address 0x7c
+    write(bus, 0x7d, 4) # Address 0x7d
 
-    # # Setup i2c settings
-    # write(bus, 0x7c, 0) # Address 0x7c
-    # write(bus, 0x7d, 4) # Address 0x7d
+    while True:
+        # Read from device - 0x12 is starting address of
+        # the x, y, z acceleration values
+        x, y, z = get_accel(bus, 0x12)
 
-    # while True:
-    #     # Read from device - 0x12 is starting address of
-    #     # the x, y, z acceleration values
-    #     x, y, z = get_accel(bus, 0x12)
+        if prev_state is None:
+            # assign continue
+            prev_state = get_accel_obj(x, y, z)
+        else:
+            should_update = False
+            if x > prev_state.get("x") + AccelThresholds.X.value or x < prev_state.get("x") - AccelThresholds.X.value:
+                should_update = True
+            if y > prev_state.get("y") + AccelThresholds.Y.value or y < prev_state.get("y") - AccelThresholds.Y.value:
+                should_update = True
+            if z > prev_state.get("z") + AccelThresholds.Z.value or z < prev_state.get("z") - AccelThresholds.Z.value:
+                should_update = True
 
-    #     if prev_state is None:
-    #         # assign continue
-    #         prev_state = get_pos_obj(x, y, z)
-    #     else:
-    #         # Compare and react, reassign
-    #         pass
+            prev_state = get_accel_obj(x, y, z)
 
-    #     time.sleep(1)
+            if should_update:
+                print("update")
+                run_pos_update()
+
+        time.sleep(0.5)

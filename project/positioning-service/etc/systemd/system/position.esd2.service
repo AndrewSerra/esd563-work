@@ -1,0 +1,13 @@
+[Unit]
+Description=April Tag Service
+After=multi-user.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/python3 /usr/esd-bounce/positioning.py
+ExecReload=/usr/bin/python3 /usr/esd-bounce/positioning.py
+Restart=always
+
+
+[Install]
+WantedBy=multi-user.target
